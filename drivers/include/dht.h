@@ -32,7 +32,7 @@
 #define DHT_H
 
 #include <stdint.h>
-
+#include "mutex.h"
 #include "periph/gpio.h"
 
 #ifdef __cplusplus
@@ -84,6 +84,7 @@ typedef struct {
     dht_params_t params;    /**< Device parameters */
     dht_data_t last_val;    /**< Values of the last measurement */
     uint32_t last_read_us;  /**< Time of the last measurement */
+    mutex_t lock;           /**< mutex for reading out */
 } dht_t;
 
 /**

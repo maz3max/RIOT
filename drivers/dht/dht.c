@@ -109,7 +109,6 @@ static int _read(uint16_t *dest, gpio_t pin, int bits)
 int dht_init(dht_t *dev, const dht_params_t *params)
 {
     DEBUG("dht_init\n");
-
     /* check parameters and configuration */
     assert(dev && params);
     assert((params->type == DHT11) || (params->type == DHT22) || (params->type == DHT21));
@@ -131,7 +130,7 @@ int dht_read(dht_t *dev, int16_t *temp, int16_t *hum)
     uint16_t raw_hum, raw_temp;
 
     assert(dev);
-
+    mutex_lock(&(dev->lock));
     uint32_t now_us = xtimer_now_usec();
     if ((now_us - dev->last_read_us) > DATA_HOLD_TIME) {
         /* send init signal to device */
@@ -219,6 +218,8 @@ int dht_read(dht_t *dev, int16_t *temp, int16_t *hum)
     if (hum) {
         *hum = dev->last_val.humidity;
     }
+
+    mutex_unlock(&(dev->lock));
 
     return DHT_OK;
 }
