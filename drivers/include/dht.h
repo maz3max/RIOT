@@ -33,6 +33,8 @@
 
 #include <stdint.h>
 #include "mutex.h"
+#include "thread.h"
+#include "xtimer.h"
 #include "periph/gpio.h"
 
 #ifdef __cplusplus
@@ -85,6 +87,9 @@ typedef struct {
     dht_data_t last_val;    /**< Values of the last measurement */
     uint32_t last_read_us;  /**< Time of the last measurement */
     mutex_t lock;           /**< mutex for reading out */
+    kernel_pid_t pid;       /**< PID of sleeping thread waiting for interrupt */
+    xtimer_t timer;         /**< wakeup timer */
+    bool timeout;           /**< whether we ran into a timeout waiting for an edge */
 } dht_t;
 
 /**
