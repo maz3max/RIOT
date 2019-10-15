@@ -1,0 +1,13 @@
+ifneq (,$(filter netdev_default gnrc_netdev_default,$(USEMODULE)))
+  USEMODULE += stm32_eth
+  USEMODULE += cc1101
+  USEMODULE += at86rf232
+  USEMODULE += sx1276
+  CFLAGS += -DGNRC_NETIF_NUMOF=4
+endif
+
+ifneq (,$(saul_default,$(USEMODULE)))
+  USEMODULE += sht3x
+endif
+
+include $(RIOTBOARD)/common/nucleo/Makefile.dep
