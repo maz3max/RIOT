@@ -41,7 +41,7 @@
 /* Every pulse send by the DHT longer than 40µs is interpreted as 1 */
 #define PULSE_WIDTH_THRESHOLD       (40U)
 /* If an expected pulse is not detected within 1000µs, something is wrong */
-#define TIMEOUT                     (1000U)
+#define TIMEOUT                     (100000U)
 /* The DHT sensor cannot measure more than once a second */
 #define DATA_HOLD_TIME              (US_PER_SEC)
 /* The start signal by pulling data low for at least 18ms and then up for
@@ -56,6 +56,18 @@ static inline void _reset(dht_t *dev)
     gpio_set(dev->params.pin);
 }
 
+static void _wait_for_level_cb (void* arg){
+    dht_t* dev = arg;
+    dev->timeout = false;
+    mutex_unlock(&dev->wait_for_edge);
+}
+
+static void _wait_for_level_timeout_cb (void* arg){
+    dht_t* dev = arg;
+    dev->timeout = true;
+    mutex_unlock(&dev->wait_for_edge);
+}
+
 /**
  * @brief   Wait until the pin @p pin has level @p expect
  *
@@ -66,17 +78,32 @@ static inline void _reset(dht_t *dev)
  * @retval  0       Success
  * @retval  -1      Timeout occurred before level was reached
  */
-static inline int _wait_for_level(gpio_t pin, bool expect, unsigned timeout)
+static inline int _wait_for_level(dht_t *dev, gpio_t pin, bool expect, unsigned timeout)
 {
-    while (((gpio_read(pin) > 0) != expect) && timeout) {
-        xtimer_usleep(1);
-        timeout--;
+    u_int8_t result = 0;
+    // prepare
+    dev->timeout = false;
+    dev->timer.target = 0;
+    dev->timer.long_target = 0;
+    dev->timer.callback = _wait_for_level_timeout_cb;
+    dev->timer.arg = dev;
+    mutex_lock(&dev->wait_for_edge);
+    xtimer_set(&(dev->timer), timeout);
+    gpio_init_int(pin, dev->params.in_mode, expect ? GPIO_RISING : GPIO_FALLING, _wait_for_level_cb, dev);
+    // halt
+    mutex_lock(&dev->wait_for_edge); 
+    // resume: check timeout
+    if (dev->timeout){
+        result = -1;
     }
-
-    return (timeout > 0) ? 0 : -1;
+    // cleanup
+    gpio_irq_disable(dev->params.pin);
+    xtimer_remove(&(dev->timer));
+    mutex_unlock(&dev->wait_for_edge);
+    return result;
 }
 
-static int _read(uint16_t *dest, gpio_t pin, int bits)
+static int _read(dht_t *dev, uint16_t *dest, gpio_t pin, int bits)
 {
     DEBUG("read\n");
     uint16_t res = 0;
@@ -86,12 +113,12 @@ static int _read(uint16_t *dest, gpio_t pin, int bits)
         res <<= 1;
         /* measure the length between the next rising and falling flanks (the
          * time the pin is high - smoke up :-) */
-        if (_wait_for_level(pin, 1, TIMEOUT)) {
+        if (_wait_for_level(dev, pin, 1, TIMEOUT)) {
             return -1;
         }
         start = xtimer_now_usec();
 
-        if (_wait_for_level(pin, 0, TIMEOUT)) {
+        if (_wait_for_level(dev, pin, 0, TIMEOUT)) {
             return -1;
         }
         end = xtimer_now_usec();
@@ -141,12 +168,12 @@ int dht_read(dht_t *dev, int16_t *temp, int16_t *hum)
 
         /* sync on device */
         gpio_init(dev->params.pin, dev->params.in_mode);
-        if (_wait_for_level(dev->params.pin, 1, TIMEOUT)) {
+        if (_wait_for_level(dev, dev->params.pin, 1, TIMEOUT)) {
             _reset(dev);
             return DHT_TIMEOUT;
         }
 
-        if (_wait_for_level(dev->params.pin, 0, TIMEOUT)) {
+        if (_wait_for_level(dev, dev->params.pin, 0, TIMEOUT)) {
             _reset(dev);
             return DHT_TIMEOUT;
         }
@@ -158,17 +185,17 @@ int dht_read(dht_t *dev, int16_t *temp, int16_t *hum)
          */
 
         /* read the humidity, temperature, and checksum bits */
-        if (_read(&raw_hum, dev->params.pin, 16)) {
+        if (_read(dev, &raw_hum, dev->params.pin, 16)) {
             _reset(dev);
             return DHT_TIMEOUT;
         }
 
-        if (_read(&raw_temp, dev->params.pin, 16)) {
+        if (_read(dev, &raw_temp, dev->params.pin, 16)) {
             _reset(dev);
             return DHT_TIMEOUT;
         }
 
-        if (_read(&csum, dev->params.pin, 8)) {
+        if (_read(dev, &csum, dev->params.pin, 8)) {
             _reset(dev);
             return DHT_TIMEOUT;
         }

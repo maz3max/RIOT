@@ -120,6 +120,7 @@ endif
 ifneq (,$(filter dht,$(USEMODULE)))
   USEMODULE += xtimer
   FEATURES_REQUIRED += periph_gpio
+  FEATURES_REQUIRED += periph_gpio_irq
 endif
 
 ifneq (,$(filter ds1307,$(USEMODULE)))
