@@ -52,6 +52,15 @@ extern "C"
 {
 #endif
 
+typedef struct {
+    // TODO
+} bme680_t;
+
+typedef struct {
+    // TODO
+} bme680_params_t;
+
+
 /**
  * @brief	Fixed point sensor values (fixed THPG values)
  */

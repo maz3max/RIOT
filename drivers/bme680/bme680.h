@@ -49,7 +49,6 @@
 // #define BME680_DEBUG_LEVEL_2    // debug and error messages
 
 #include "bme680_types.h"
-#include "bme680_platform.h"
 
 // BME680 addresses
 #define BME680_I2C_ADDRESS_1           0x76  // SDO pin is low

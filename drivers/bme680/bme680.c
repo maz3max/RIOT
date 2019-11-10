@@ -51,7 +51,8 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "bme680_platform.h"
+#include "xtimer.h"
+
 #include "bme680.h"
 
 #if defined(BME680_DEBUG_LEVEL_2)
@@ -183,7 +184,7 @@
 
 // commands
 #define BME680_RESET_CMD            0xb6    // BME680_REG_RESET<7:0>
-#define BME680_RESET_PERIOD         5       // reset time in ms
+#define BME680_RESET_PERIOD         5000    // reset time in us
 
 #define BME680_RHR_BITS             0x30    // BME680_REG_RES_HEAT_RANGE<5:4>
 #define BME680_RHR_SHIFT            4       // BME680_REG_RES_HEAT_RANGE<5:4>
@@ -263,14 +264,6 @@ static uint8_t  bme680_heater_duration (uint16_t duration);
 
 static bool     bme680_reset (bme680_sensor_t* dev);
 static bool     bme680_is_available (bme680_sensor_t* dev);
-static void     bme680_delay_ms(uint32_t delay);
-
-static bool     bme680_read_reg  (bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len);
-static bool     bme680_write_reg (bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len);
-static bool     bme680_i2c_read  (bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len);
-static bool     bme680_i2c_write (bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len);
-static bool     bme680_spi_read  (bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len);
-static bool     bme680_spi_write (bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len);
 
 #define lsb_msb_to_type(t,b,o) (t)(((t)b[o+1] << 8) | b[o])
 #define lsb_to_type(t,b,o)     (t)(b[o])
@@ -433,8 +426,7 @@ bool bme680_force_measurement (bme680_sensor_t* dev)
     dev->meas_started = true;
     dev->meas_status = 0;
 
-    debug_dev ("Started measurement at %.3f.", __FUNCTION__, dev,
-               (double)sdk_system_get_time()*1e-3);
+    debug_dev ("Started measurement", __FUNCTION__, dev);
 
     return true;
 }
@@ -482,7 +474,7 @@ uint32_t bme680_get_measurement_duration (const bme680_sensor_t *dev)
 
     // ceil to next integer value that is divisible by portTICK_PERIOD_MS and
     // compute RTOS ticks (1 ... portTICK_PERIOD_MS =  1 tick)
-    duration = (duration + portTICK_PERIOD_MS-1) / portTICK_PERIOD_MS;
+    // TODO: duration = (duration + portTICK_PERIOD_MS-1) / portTICK_PERIOD_MS;
 
     // Since first RTOS tick can be shorter than the half of defined tick period,
     // the delay caused by vTaskDelay(duration) might be 1 or 2 ms shorter than
@@ -563,8 +555,8 @@ bool bme680_get_results_fixed (bme680_sensor_t* dev, bme680_values_fixed_t* resu
             dev->error_code = BME680_HEATER_NOT_STABLE;
     }
 
-    debug_dev ("Fixed point sensor valus - %d ms: %d/100 C, %d/1000 Percent, %d Pascal, %d Ohm",
-               __FUNCTION__, dev, sdk_system_get_time (),
+    debug_dev ("Fixed point sensor valus: %d/100 C, %d/1000 Percent, %d Pascal, %d Ohm",
+               __FUNCTION__, dev,
                results->temperature,
                results->humidity,
                results->pressure,
@@ -888,7 +880,7 @@ static bool bme680_reset (bme680_sensor_t* dev)
         return false;
 
     // wait the time the sensor needs for reset
-    bme680_delay_ms (BME680_RESET_PERIOD);
+    xtimer_usleep (BME680_RESET_PERIOD);
 
     // check whether the sensor is reachable again
     if (!bme680_read_reg(dev, BME680_REG_STATUS, &reg, 1))
@@ -1209,215 +1201,4 @@ static uint8_t bme680_heater_resistance (const bme680_sensor_t *dev, uint16_t te
                                                  (1.0/(1.0 + ((double)cd->res_heat_val * 0.002)))) - 25));
     return res_heat_x;
 
-}
-
-
-static void bme680_delay_ms(uint32_t period)
-{
-    uint32_t start_time = sdk_system_get_time () / 1000;
-
-    vTaskDelay((period + portTICK_PERIOD_MS-1) / portTICK_PERIOD_MS);
-
-    while (sdk_system_get_time()/1000 - start_time < period)
-        vTaskDelay (1);
-}
-
-
-static bool bme680_read_reg(bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len)
-{
-    if (!dev || !data) return false;
-
-    return (dev->addr) ? bme680_i2c_read (dev, reg, data, len)
-                       : bme680_spi_read (dev, reg, data, len);
-}
-
-
-static bool bme680_write_reg(bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len)
-{
-    if (!dev || !data) return false;
-
-    return (dev->addr) ? bme680_i2c_write (dev, reg, data, len)
-                       : bme680_spi_write (dev, reg, data, len);
-}
-
-#define BME680_SPI_BUF_SIZE 64      // SPI register data buffer size of ESP866
-
-#define BME680_REG_SWITCH_MEM_PAGE     BME680_REG_STATUS
-#define BME680_BIT_SWITCH_MEM_PAGE_0   0x00
-#define BME680_BIT_SWITCH_MEM_PAGE_1   0x10
-
-static bool bme680_spi_set_mem_page (bme680_sensor_t* dev, uint8_t reg)
-{
-    // mem pages (reg 0x00 .. 0x7f = 1, reg 0x80 ... 0xff = 0
-    uint8_t mem_page = (reg < 0x80) ? BME680_BIT_SWITCH_MEM_PAGE_1
-                                    : BME680_BIT_SWITCH_MEM_PAGE_0;
-
-    debug_dev ("Set mem page for register %02x to %d.", __FUNCTION__, dev, reg, mem_page);
-
-    if (!bme680_spi_write (dev, BME680_REG_SWITCH_MEM_PAGE, &mem_page, 1))
-    {
-        dev->error_code |= BME680_SPI_SET_PAGE_FAILED;
-        return false;
-    }
-    // sdk_os_delay_us (100);
-    return true;
-}
-
-static bool bme680_spi_read(bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len)
-{
-    if (!dev || !data) return false;
-    
-    if (len >= BME680_SPI_BUF_SIZE)
-    {
-        dev->error_code |= BME680_SPI_BUFFER_OVERFLOW;
-        error_dev ("Error on read from SPI slave on bus 1. Tried to transfer "
-                   "more than %d byte in one read operation.",
-                   __FUNCTION__, dev, BME680_SPI_BUF_SIZE);
-        return false;
-    }
-
-    // set mem page first
-    if (!bme680_spi_set_mem_page (dev, reg))
-    {
-        error_dev ("Error on read from SPI slave on bus 1. Could not set mem page.",
-                   __FUNCTION__, dev);
-        return false;
-    }
-
-    reg &= 0x7f;
-    reg |= 0x80;
-
-    static uint8_t mosi[BME680_SPI_BUF_SIZE];
-    static uint8_t miso[BME680_SPI_BUF_SIZE];
-
-    memset (mosi, 0xff, BME680_SPI_BUF_SIZE);
-    memset (miso, 0xff, BME680_SPI_BUF_SIZE);
-
-    mosi[0] = reg;
-    
-    if (!spi_transfer_pf (dev->bus, dev->cs, mosi, miso, len+1))
-    {
-        error_dev ("Could not read data from SPI", __FUNCTION__, dev);
-        dev->error_code |= BME680_SPI_READ_FAILED;
-        return false;
-    }
-    // shift data one by left, first byte received while sending register address is invalid
-    for (int i=0; i < len; i++)
-      data[i] = miso[i+1];
-
-    #ifdef BME680_DEBUG_LEVEL_2
-    printf("BME680 %s: read the following bytes: ", __FUNCTION__);
-    printf("%0x ", reg);
-    for (int i=0; i < len; i++)
-        printf("%0x ", data[i]);
-    printf("\n");
-    #endif
-
-    return true;
-}
-
-
-static bool bme680_spi_write(bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len)
-{
-    if (!dev || !data) return false;
-
-    static uint8_t mosi[BME680_SPI_BUF_SIZE];
-
-    if (len >= BME680_SPI_BUF_SIZE)
-    {
-        dev->error_code |= BME680_SPI_BUFFER_OVERFLOW;
-        error_dev ("Error on write to SPI slave on bus 1. Tried to transfer more"
-                   "than %d byte in one write operation.", __FUNCTION__, dev, BME680_SPI_BUF_SIZE);
-
-        return false;
-    }
-
-    // set mem page first if not mem page register is used
-    if (reg != BME680_REG_STATUS && !bme680_spi_set_mem_page (dev, reg))
-    {
-        error_dev ("Error on write from SPI slave on bus 1. Could not set mem page.",
-                   __FUNCTION__, dev);
-        return false;
-    }
-
-    reg &= 0x7f;
-
-    // first byte in output is the register address
-    mosi[0] = reg;
-
-    // shift data one byte right, first byte in output is the register address
-    for (int i = 0; i < len; i++)
-        mosi[i+1] = data[i];
-
-    #ifdef BME680_DEBUG_LEVEL_2
-    printf("BME680 %s: Write the following bytes: ", __FUNCTION__);
-    for (int i = 0; i < len+1; i++)
-        printf("%0x ", mosi[i]);
-    printf("\n");
-    #endif
-
-    if (!spi_transfer_pf (dev->bus, dev->cs, mosi, NULL, len+1))
-    {
-        error_dev ("Could not write data to SPI.", __FUNCTION__, dev);
-        dev->error_code |= BME680_SPI_WRITE_FAILED;
-        return false;
-    }
-
-    return true;
-}
-
-
-static bool bme680_i2c_read(bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len)
-{
-    if (!dev || !data) return false;
-
-    debug_dev ("Read %d byte from i2c slave register %02x.", __FUNCTION__, dev, len, reg);
-
-    int result = i2c_slave_read(dev->bus, dev->addr, &reg, data, len);
-
-    if (result)
-    {
-        dev->error_code |= (result == -EBUSY) ? BME680_I2C_BUSY : BME680_I2C_READ_FAILED;
-        error_dev ("Error %d on read %d byte from I2C slave register %02x.",
-                    __FUNCTION__, dev, result, len, reg);
-        return false;
-    }
-
-#   ifdef BME680_DEBUG_LEVEL_2
-    printf("BME680 %s: Read following bytes: ", __FUNCTION__);
-    printf("%0x: ", reg);
-    for (int i=0; i < len; i++)
-        printf("%0x ", data[i]);
-    printf("\n");
-#   endif
-
-    return true;
-}
-
-
-static bool bme680_i2c_write(bme680_sensor_t* dev, uint8_t reg, uint8_t *data, uint16_t len)
-{
-    if (!dev || !data) return false;
-
-    debug_dev ("Write %d byte to i2c slave register %02x.", __FUNCTION__, dev, len, reg);
-
-    int result = i2c_slave_write(dev->bus, dev->addr, &reg, data, len);
-
-    if (result)
-    {
-        dev->error_code |= (result == -EBUSY) ? BME680_I2C_BUSY : BME680_I2C_WRITE_FAILED;
-        error_dev ("Error %d on write %d byte to i2c slave register %02x.",
-                    __FUNCTION__, dev, result, len, reg);
-        return false;
-    }
-
-#   ifdef BME680_DEBUG_LEVEL_2
-    printf("BME680 %s: Wrote the following bytes: ", __FUNCTION__);
-    printf("%0x: ", reg);
-    for (int i=0; i < len; i++)
-        printf("%0x ", data[i]);
-    printf("\n");
-#   endif
-
-    return true;
 }
